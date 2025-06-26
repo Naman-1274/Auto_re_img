@@ -107,6 +107,8 @@ def apply_branding(img, logo=None, **kwargs):
         base.paste(composite, (pad, pad))
         composite = base
 
+    from PIL import ImageDraw, ImageFilter
+
     if logo is not None:
         logo = logo.convert("RGBA")
         logo_w = int((kwargs["logo_scale"] / 100) * composite.width)
@@ -114,7 +116,14 @@ def apply_branding(img, logo=None, **kwargs):
         logo_resized = logo.resize((logo_w, logo_h), Image.LANCZOS)
         x_px = int((kwargs["x_offset"] / 100) * (composite.width - logo_w))
         y_px = int((kwargs["y_offset"] / 100) * (composite.height - logo_h))
+        bg_box = Image.new("RGBA", logo_resized.size, (255, 255, 255, 160))  # 160 = 63% opacity
+        mask = Image.new("L", logo_resized.size, 0)
+        draw = ImageDraw.Draw(mask)
+        draw.rounded_rectangle([(0, 0), logo_resized.size], radius=20, fill=255)
+        bg_box = bg_box.filter(ImageFilter.GaussianBlur(2))
+        composite.paste(bg_box, (x_px, y_px), mask)
         composite.paste(logo_resized, (x_px, y_px), logo_resized)
+
 
     if kwargs.get("add_text", False) and kwargs.get("text", ""):
         draw = ImageDraw.Draw(composite)
