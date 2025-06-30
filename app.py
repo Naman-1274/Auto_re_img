@@ -276,8 +276,9 @@ if mode == "🎯 Smart Cropper + Branding":
                 bbox = (w // 4, h // 4, 3 * w // 4, 3 * h // 4)
 
             cropped = smart_resize_preserve_background(
-                            base_img, bbox, (target_width, target_height)
-                        )
+                        base_img, bbox, (target_width, target_height), top_space, bottom_space
+                    )
+
 
             branded_img = apply_branding(
                 cropped, logo_img,
