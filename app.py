@@ -55,33 +55,68 @@ def enhanced_subject_detection(model, img):
         return (x0, y0, x1, y1)
     return None
 
-def smart_resize_no_padding(image, bbox, target_size, zoom=1.2, top_space=0, bottom_space=0):
+def smart_resize_preserve_background(image, bbox, target_size, top_space=0, bottom_space=0):
+    """
+    Crops an expanded window around the subject bbox so that
+    the subject remains unstretched, background is preserved,
+    and the final image has the exact target aspect ratio.
+
+    Adds optional headspace at top/bottom using real photo background only.
+    """
+
     img_w, img_h = image.size
-    cx = (bbox[0] + bbox[2]) // 2
-    cy = (bbox[1] + bbox[3]) // 2
+    target_w, target_h = target_size
+    target_ratio = target_w / target_h
 
-    # Adjust for headspace
-    cy += int(((bottom_space - top_space) / 2))
+    # Start with tight bbox
+    x0, y0, x1, y1 = bbox
+    box_w = x1 - x0
+    box_h = y1 - y0
+    box_cx = (x0 + x1) // 2
+    box_cy = (y0 + y1) // 2
 
-    crop_w = int((bbox[2] - bbox[0]) * zoom)
-    crop_h = int((bbox[3] - bbox[1]) * zoom)
+    # Add user-defined headspace before aspect-ratio matching
+    y0 = max(0, y0 - top_space)
+    y1 = min(img_h, y1 + bottom_space)
 
-    aspect_target = target_size[0] / target_size[1]
-    aspect_crop = crop_w / crop_h
+    # Recalculate bbox after headspace
+    box_w = x1 - x0
+    box_h = y1 - y0
+    box_cx = (x0 + x1) // 2
+    box_cy = (y0 + y1) // 2
 
-    if aspect_crop > aspect_target:
-        crop_h = int(crop_w / aspect_target)
+    # Expand box to match target aspect ratio
+    new_box_w = box_w
+    new_box_h = box_h
+
+    if (box_w / box_h) < target_ratio:
+        # Too tall, expand width
+        new_box_w = int(box_h * target_ratio)
     else:
-        crop_w = int(crop_h * aspect_target)
+        # Too wide, expand height
+        new_box_h = int(box_w / target_ratio)
 
-    left = max(0, cx - crop_w // 2)
-    right = min(img_w, cx + crop_w // 2)
-    top = max(0, cy - crop_h // 2)
-    bottom = min(img_h, cy + crop_h // 2)
+    # Add margin so subject isn't edge-to-edge
+    margin_w = int(new_box_w * 0.1)
+    margin_h = int(new_box_h * 0.1)
+    new_box_w += margin_w
+    new_box_h += margin_h
 
-    cropped = image.crop((left, top, right, bottom))
-    resized = cropped.resize(target_size, Image.LANCZOS)
-    return resized
+    # Compute final crop coordinates centered on subject
+    left = max(0, box_cx - new_box_w // 2)
+    right = min(img_w, box_cx + new_box_w // 2)
+    top = max(0, box_cy - new_box_h // 2)
+    bottom = min(img_h, box_cy + new_box_h // 2)
+
+    # Crop this area from the real photo
+    expanded_crop = image.crop((left, top, right, bottom))
+
+    # Finally resize to target dimensions with no padding/stretch
+    final = expanded_crop.resize(target_size, Image.LANCZOS)
+
+    return final
+
+
 
 def optimize_image(img, max_size_kb):
     buffer = io.BytesIO()
@@ -182,7 +217,6 @@ if mode == "🎯 Smart Cropper + Branding":
     with st.sidebar.expander("📐 Output Dimensions"):
         target_width = st.number_input("Width", 512, 4096, 1200, step=100)
         target_height = st.number_input("Height", 512, 4096, 1800, step=100)
-        zoom_factor = st.slider("Zoom Level", 0.5, 3.0, 1.2, 0.1)
         st.markdown("---")
         max_size_kb = st.number_input("Max File Size (KB)", 100, 5000, 800, step=50)
 
@@ -241,8 +275,9 @@ if mode == "🎯 Smart Cropper + Branding":
                 w, h = base_img.size
                 bbox = (w // 4, h // 4, 3 * w // 4, 3 * h // 4)
 
-            cropped = smart_resize_no_padding(base_img, bbox, (target_width, target_height),
-                                              zoom=zoom_factor, top_space=top_space, bottom_space=bottom_space)
+            cropped = smart_resize_preserve_background(
+                            base_img, bbox, (target_width, target_height)
+                        )
 
             branded_img = apply_branding(
                 cropped, logo_img,
