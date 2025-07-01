@@ -1,4 +1,5 @@
 import os
+from PIL import ImageFilter
 os.environ["STREAMLIT_DISABLE_WATCHDOG_WARNINGS"] = "true"
 
 import streamlit as st
@@ -56,65 +57,81 @@ def enhanced_subject_detection(model, img):
     return None
 
 def smart_resize_preserve_background(image, bbox, target_size, top_space=0, bottom_space=0):
-    """
-    Crops an expanded window around the subject bbox so that
-    the subject remains unstretched, background is preserved,
-    and the final image has the exact target aspect ratio.
-
-    Adds optional headspace at top/bottom using real photo background only.
-    """
-
     img_w, img_h = image.size
     target_w, target_h = target_size
     target_ratio = target_w / target_h
 
-    # Start with tight bbox
     x0, y0, x1, y1 = bbox
-    box_w = x1 - x0
-    box_h = y1 - y0
-    box_cx = (x0 + x1) // 2
-    box_cy = (y0 + y1) // 2
-
-    # Add user-defined headspace before aspect-ratio matching
     y0 = max(0, y0 - top_space)
     y1 = min(img_h, y1 + bottom_space)
 
-    # Recalculate bbox after headspace
     box_w = x1 - x0
     box_h = y1 - y0
     box_cx = (x0 + x1) // 2
     box_cy = (y0 + y1) // 2
 
-    # Expand box to match target aspect ratio
     new_box_w = box_w
     new_box_h = box_h
 
     if (box_w / box_h) < target_ratio:
-        # Too tall, expand width
         new_box_w = int(box_h * target_ratio)
     else:
-        # Too wide, expand height
         new_box_h = int(box_w / target_ratio)
 
-    # Add margin so subject isn't edge-to-edge
     margin_w = int(new_box_w * 0.1)
     margin_h = int(new_box_h * 0.1)
     new_box_w += margin_w
     new_box_h += margin_h
 
-    # Compute final crop coordinates centered on subject
     left = max(0, box_cx - new_box_w // 2)
     right = min(img_w, box_cx + new_box_w // 2)
     top = max(0, box_cy - new_box_h // 2)
     bottom = min(img_h, box_cy + new_box_h // 2)
 
-    # Crop this area from the real photo
     expanded_crop = image.crop((left, top, right, bottom))
-
-    # Finally resize to target dimensions with no padding/stretch
     final = expanded_crop.resize(target_size, Image.LANCZOS)
-
     return final
+
+def add_black_glow_around_logo(base_img, logo_img, x_px, y_px, blur_radius=8, glow_opacity=100):
+    """
+    Adds a multiply-blended black shadow (glow) under the transparent edges of the logo.
+    The shadow automatically darkens the underlying image, blending naturally with clothing.
+    """
+    base_img = base_img.convert("RGBA")
+    logo_img = logo_img.convert("RGBA")
+    logo_w, logo_h = logo_img.size
+
+    # 1. Extract alpha channel and blur it for soft edges
+    alpha = logo_img.getchannel('A')
+    blurred_alpha = alpha.filter(ImageFilter.GaussianBlur(radius=blur_radius))
+
+    # 2. Make a black shadow image using blurred alpha
+    shadow = Image.new('RGBA', (logo_w, logo_h), (0, 0, 0, 0))
+    shadow.putalpha(blurred_alpha.point(lambda p: p * glow_opacity // 100))
+
+    # 3. Prepare black layer for multiply
+    black_layer = Image.new('RGBA', (logo_w, logo_h), (0, 0, 0, 255))
+    black_layer.putalpha(shadow.getchannel('A'))
+
+    # 4. Composite multiply blend onto base region
+    region_box = (x_px, y_px, x_px + logo_w, y_px + logo_h)
+    region = base_img.crop(region_box)
+
+    region_np = np.array(region).astype(np.float32)
+    black_layer_np = np.array(black_layer).astype(np.float32) / 255
+
+    # Multiply blend only where shadow alpha exists
+    region_np[..., :3] = region_np[..., :3] * (1 - black_layer_np[..., 3:]) + (region_np[..., :3] * black_layer_np[..., 3:] * 0.5)
+    result_region = Image.fromarray(np.clip(region_np, 0, 255).astype(np.uint8))
+
+    # Paste the blended region back
+    base_img.paste(result_region, region_box)
+
+    # 5. Finally paste the actual logo on top
+    base_img.paste(logo_img, region_box, logo_img)
+
+    return base_img.convert("RGB")
+
 
 
 
@@ -130,45 +147,6 @@ def optimize_image(img, max_size_kb):
     buffer.seek(0)
     return buffer
 
-def apply_branding(img, logo=None, **kwargs):
-    composite = img.convert("RGBA")
-
-    if kwargs.get("add_padding", False):
-        pad = kwargs.get("padding", 0)
-        color = kwargs.get("padding_color", (255, 255, 255, 0))
-        new_w = composite.width + 2 * pad
-        new_h = composite.height + 2 * pad
-        base = Image.new("RGBA", (new_w, new_h), color)
-        base.paste(composite, (pad, pad))
-        composite = base
-
-    from PIL import ImageDraw, ImageFilter
-
-    if logo is not None:
-        logo = logo.convert("RGBA")
-        logo_w = int((kwargs["logo_scale"] / 100) * composite.width)
-        logo_h = int(logo_w * (logo.height / logo.width))
-        logo_resized = logo.resize((logo_w, logo_h), Image.LANCZOS)
-        x_px = int((kwargs["x_offset"] / 100) * (composite.width - logo_w))
-        y_px = int((kwargs["y_offset"] / 100) * (composite.height - logo_h))
-        composite.paste(logo_resized, (x_px, y_px), logo_resized)
-
-
-    if kwargs.get("add_text", False) and kwargs.get("text", ""):
-        draw = ImageDraw.Draw(composite)
-        try:
-            font = ImageFont.truetype("arial.ttf", kwargs["font_size"])
-        except:
-            font = ImageFont.load_default()
-        tx = int((kwargs["text_x"] / 100) * composite.width)
-        ty = int((kwargs["text_y"] / 100) * composite.height)
-        draw.text(
-            (tx, ty), kwargs["text"], fill=kwargs["text_color"],
-            font=font, stroke_width=2, stroke_fill="white"
-        )
-
-    return composite.convert("RGB")
-
 def preprocess_uploaded_image(img: Image.Image, max_dim: int = 2048) -> Image.Image:
     if max(img.size) > max_dim:
         ratio = max_dim / max(img.size)
@@ -176,12 +154,14 @@ def preprocess_uploaded_image(img: Image.Image, max_dim: int = 2048) -> Image.Im
         img = img.resize(new_size, Image.LANCZOS)
     return img.convert("RGB")
 
-# =================== UI + APP ===================
 
+# =================== UI + APP ===================
 if "upload_key" not in st.session_state:
     st.session_state.upload_key = 0
 if "processed_results" not in st.session_state:
     st.session_state.processed_results = []
+if "stored_uploaded_files" not in st.session_state:
+    st.session_state.stored_uploaded_files = []
 
 with st.sidebar:
     st.markdown("## 🎛️ Select App Mode")
@@ -190,6 +170,7 @@ with st.sidebar:
     if st.button("🗑️ Clear Uploaded Files"):
         st.session_state.upload_key += 1
         st.session_state.processed_results = []
+        st.session_state.stored_uploaded_files = []
         st.rerun()
 
 st.title("📸 AI‑Powered Smart Cropper + Branding")
@@ -202,15 +183,17 @@ uploaded_files = st.file_uploader(
     key=f"uploader_{st.session_state.upload_key}"
 )
 
-def load_image_from_uploaded(upl):
-    return Image.open(upl).convert("RGB")
-
 if uploaded_files:
+    st.session_state.stored_uploaded_files = uploaded_files
+
+# Always use stored list so UI doesn't reset
+if st.session_state.stored_uploaded_files:
     st.subheader("🔍 Uploaded Image Preview")
-    cols = st.columns(min(4, len(uploaded_files)))
-    for idx, upl in enumerate(uploaded_files):
-        img = preprocess_uploaded_image(load_image_from_uploaded(upl))
+    cols = st.columns(min(4, len(st.session_state.stored_uploaded_files)))
+    for idx, upl in enumerate(st.session_state.stored_uploaded_files):
+        img = preprocess_uploaded_image(Image.open(upl))
         cols[idx % len(cols)].image(img, use_container_width=True, caption=upl.name)
+
 
 if mode == "🎯 Smart Cropper + Branding":
     st.sidebar.markdown("## ✂️ Smart Crop Settings")
@@ -232,9 +215,20 @@ if mode == "🎯 Smart Cropper + Branding":
     st.sidebar.markdown("## 🎨 Branding Options")
     with st.sidebar.expander("🏷️ Logo Settings"):
         logo_file = st.file_uploader("Upload Logo (PNG)", type=["jpg", "jpeg", "png"])
-        logo_scale = st.slider("Logo Size (% of width)", 5, 50, 25)
+        logo_scale = st.slider("Logo Size (% of width)", 5, 50, 30)
         x_offset = st.slider("Logo Horizontal Pos (%)", 0, 100, 50)
         y_offset = st.slider("Logo Vertical Pos (%)", 0, 100, 90)
+        st.markdown("---")
+        enable_edge_glow = st.checkbox("Enable Black Edge Glow", value=True)
+        enable_edge_glow = st.checkbox("Enable Logo Shadow (Multiply Blend)", value=True)
+        if enable_edge_glow:
+            glow_radius = st.slider("Shadow Blur Radius", 2, 50, 25)
+            glow_opacity = st.slider("Shadow Opacity (%)", 0, 100, 30)
+        else:
+            glow_radius = 0
+            glow_opacity = 0
+
+
 
     with st.sidebar.expander("🔤 Text Overlay"):
         add_text = st.checkbox("Add Text")
@@ -261,12 +255,12 @@ if mode == "🎯 Smart Cropper + Branding":
             padding_color = "#FFFFFF"
             add_padding = False
 
-    if uploaded_files and st.button("🚀 Process Images"):
+    if st.session_state.stored_uploaded_files and st.button("🚀 Process Images"):
         results = []
         logo_img = Image.open(logo_file).convert("RGBA") if logo_file else None
         progress = st.progress(0, text="Processing…")
-        for i, upl in enumerate(uploaded_files):
-            base_img = preprocess_uploaded_image(load_image_from_uploaded(upl))
+        for i, upl in enumerate(st.session_state.stored_uploaded_files):
+            base_img = preprocess_uploaded_image(Image.open(upl))
             if max(base_img.size) > 3000:
                 base_img = base_img.resize((base_img.width // 2, base_img.height // 2), Image.LANCZOS)
 
@@ -279,18 +273,50 @@ if mode == "🎯 Smart Cropper + Branding":
                         base_img, bbox, (target_width, target_height), top_space, bottom_space
                     )
 
+            composite = cropped.convert("RGBA")
+            if logo_img is not None:
+                logo_resized_w = int((logo_scale / 100) * composite.width)
+                logo_resized_h = int(logo_resized_w * (logo_img.height / logo_img.width))
+                logo_resized = logo_img.resize((logo_resized_w, logo_resized_h), Image.LANCZOS)
+                x_px = int((x_offset / 100) * (composite.width - logo_resized_w))
+                y_px = int((y_offset / 100) * (composite.height - logo_resized_h))
+                if enable_edge_glow and glow_radius > 0:
+                    composite = add_black_glow_around_logo(
+                        composite,
+                        logo_resized,
+                        x_px,
+                        y_px,
+                        blur_radius=glow_radius,
+                        glow_opacity=glow_opacity
+                    )
+                else:
+                    composite.paste(logo_resized, (x_px, y_px), logo_resized)
 
-            branded_img = apply_branding(
-                cropped, logo_img,
-                logo_scale=logo_scale, x_offset=x_offset, y_offset=y_offset,
-                add_text=add_text, text=text, font_size=font_size,
-                text_color=text_color, text_x=text_x, text_y=text_y,
-                add_padding=add_padding, padding=padding, padding_color=padding_color
-            )
 
-            buf = optimize_image(branded_img, max_size_kb)
-            results.append((upl.name, branded_img, buf))
-            progress.progress((i + 1) / len(uploaded_files), text=f"Processed {i+1}/{len(uploaded_files)}")
+            if add_text and text:
+                draw = ImageDraw.Draw(composite)
+                try:
+                    font = ImageFont.truetype("arial.ttf", font_size)
+                except:
+                    font = ImageFont.load_default()
+                tx = int((text_x / 100) * composite.width)
+                ty = int((text_y / 100) * composite.height)
+                draw.text(
+                    (tx, ty), text, fill=text_color,
+                    font=font, stroke_width=2, stroke_fill="white"
+                )
+
+            final_img = composite.convert("RGB")
+            if add_padding:
+                new_w = final_img.width + 2 * padding
+                new_h = final_img.height + 2 * padding
+                base = Image.new("RGB", (new_w, new_h), padding_color)
+                base.paste(final_img, (padding, padding))
+                final_img = base
+
+            buf = optimize_image(final_img, max_size_kb)
+            results.append((upl.name, final_img, buf))
+            progress.progress((i + 1) / len(st.session_state.stored_uploaded_files), text=f"Processed {i+1}/{len(st.session_state.stored_uploaded_files)}")
 
         progress.empty()
         st.session_state.processed_results = results
