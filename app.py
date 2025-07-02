@@ -12,6 +12,7 @@ from ultralytics import YOLO
 import ssl, warnings
 
 warnings.filterwarnings("ignore")
+# SSL fix
 ssl._create_default_https_context = ssl._create_unverified_context
 
 st.set_page_config(
@@ -42,7 +43,6 @@ def enhanced_subject_detection(model, img):
                 largest_mask = max(masks, key=lambda m: cv2.contourArea(m.astype(np.int32)))
                 x, y, w, h = cv2.boundingRect(largest_mask.astype(np.int32))
                 return (x, y, x + w, y + h)
-    # Fallback to alpha mask
     bg_removed = remove(img, post_process_mask=True)
     alpha = bg_removed.split()[-1]
     bbox = alpha.getbbox()
@@ -66,7 +66,6 @@ def smart_resize_preserve_background(image, bbox, target_size, top_space=0, bott
     box_w, box_h = x1 - x0, y1 - y0
     box_cx, box_cy = (x0 + x1) // 2, (y0 + y1) // 2
 
-    # Determine new box size to match target aspect ratio
     if (box_w / box_h) < target_ratio:
         new_box_w = int(box_h * target_ratio)
         new_box_h = box_h
@@ -87,20 +86,14 @@ def smart_resize_preserve_background(image, bbox, target_size, top_space=0, bott
     return cropped.resize(target_size, Image.LANCZOS)
 
 def add_black_glow_around_logo(base_img, logo_img, x_px, y_px, blur_radius=8, glow_opacity=100):
-    """
-    Adds a multiply-blended black shadow (glow) under the transparent edges of the logo.
-    The shadow automatically darkens the underlying image, blending naturally with clothing.
-    """
     base = base_img.convert("RGBA")
     logo = logo_img.convert("RGBA")
     w, h = logo.size
-    # Blur logo alpha for soft shadow
     alpha = logo.split()[-1]
     blurred = alpha.filter(ImageFilter.GaussianBlur(radius=blur_radius))
     shadow = Image.new('RGBA', (w, h), (0,0,0,0))
     shadow.putalpha(blurred.point(lambda p: p * glow_opacity // 100))
     shadow_layer = Image.new('RGBA', (w, h), (0,0,0,255))
-    # ensure alpha channel only
     shadow_layer.putalpha(shadow.split()[-1])
     region = base.crop((x_px, y_px, x_px + w, y_px + h))
     region_np = np.array(region).astype(np.float32)
@@ -110,57 +103,15 @@ def add_black_glow_around_logo(base_img, logo_img, x_px, y_px, blur_radius=8, gl
     base.paste(logo, (x_px, y_px), logo)
     return base.convert("RGB")
 
-# New feature: blur background under logo based on logo alpha mask
 def add_blur_background_under_logo(base_img, logo_img, x_px, y_px, blur_radius=10, mask_margin=5):
-    """
-    Blurs the background area under the logo based on the logo's alpha mask, keeping only text-shaped regions blurred.
-    """
     base = base_img.convert("RGBA")
     logo = logo_img.convert("RGBA")
     w, h = logo.size
-    # Create binary mask from logo alpha
-    alpha = logo.split()[-1]
-    mask = alpha.point(lambda p: 255 if p > 0 else 0)
-    mask = mask.filter(ImageFilter.MaxFilter(mask_margin * 2 + 1))
-
-    # Crop region and apply blur
-    region = base.crop((x_px, y_px, x_px + w, y_px + h))
-    blurred = region.filter(ImageFilter.GaussianBlur(radius=blur_radius))
-
-    # Composite blurred + original using mask
-    blended = Image.composite(blurred, region, mask)
-    base.paste(blended, (x_px, y_px))
-    return base.convert("RGB")
-
-# New feature: blur background under logo based on logo alpha mask
-def add_blur_background_under_logo(base_img, logo_img, x_px, y_px, blur_radius=10, mask_margin=5):
-    """
-    Blurs the area under the logo based on the logo's transparent mask, leaving only text-shaped regions blurred.
-    """
-    base = base_img.convert("RGBA")
-    logo = logo_img.convert("RGBA")
-    w, h = logo.size
-    # Create binary mask from logo alpha
     alpha = logo.split()[-1]
     mask = alpha.point(lambda p: 255 if p > 0 else 0)
     mask = mask.filter(ImageFilter.MaxFilter(mask_margin*2 + 1))
-    # Crop and blur region
     region = base.crop((x_px, y_px, x_px + w, y_px + h))
-    blurred = region.filter(ImageFilter.GaussianBlur(blur_radius))
-    # Composite blurred area only where mask
-    blended = Image.composite(blurred, region, mask)
-    base.paste(blended, (x_px, y_px))
-    return base.convert("RGB")
-
-def add_blur_background_under_logo(base_img, logo_img, x_px, y_px, blur_radius=10, mask_margin=5):
-    base = base_img.convert("RGBA")
-    logo = logo_img.convert("RGBA")
-    w, h = logo.size
-    alpha = logo.split()[-1]
-    mask = alpha.point(lambda p: 255 if p>0 else 0)
-    mask = mask.filter(ImageFilter.MaxFilter(mask_margin*2+1))
-    region = base.crop((x_px, y_px, x_px+w, y_px+h))
-    blurred = region.filter(ImageFilter.GaussianBlur(blur_radius))
+    blurred = region.filter(ImageFilter.GaussianBlur(radius=blur_radius))
     blended = Image.composite(blurred, region, mask)
     base.paste(blended, (x_px, y_px))
     return base.convert("RGB")
@@ -169,7 +120,7 @@ def optimize_image(img, max_size_kb):
     buf = io.BytesIO()
     q = 95
     img.save(buf, "JPEG", quality=q, optimize=True, progressive=True)
-    while buf.tell()/1024 > max_size_kb and q>10:
+    while buf.tell()/1024 > max_size_kb and q > 10:
         buf.seek(0); buf.truncate()
         q -= 5
         img.save(buf, "JPEG", quality=q, optimize=True, progressive=True)
@@ -178,8 +129,8 @@ def optimize_image(img, max_size_kb):
 
 def preprocess_uploaded_image(img, max_dim=2048):
     if max(img.size) > max_dim:
-        ratio = max_dim/max(img.size)
-        img = img.resize((int(img.width*ratio), int(img.height*ratio)), Image.LANCZOS)
+        ratio = max_dim / max(img.size)
+        img = img.resize((int(img.width * ratio), int(img.height * ratio)), Image.LANCZOS)
     return img.convert("RGB")
 
 # =================== UI ===================
@@ -199,90 +150,145 @@ with st.sidebar:
         st.session_state.results = []
         st.rerun()
 
-st.title("📸 AI‑Powered Smart Cropper + Branding")
+st.title("📸 AI-Powered Smart Cropper + Branding")
 st.info("Upload images and customize settings in the sidebar.")
-files = st.file_uploader("Upload Images", type=["jpg","jpeg","png"], accept_multiple_files=True, key=f"up_{st.session_state.upload_key}")
+
+files = st.file_uploader(
+    "Upload Images",
+    type=["jpg","jpeg","png"],
+    accept_multiple_files=True,
+    key=f"up_{st.session_state.upload_key}"
+)
 if files:
     st.session_state.stored_files = files
 
 if st.session_state.stored_files:
     st.subheader("Preview")
-    cols = st.columns(min(4,len(st.session_state.stored_files)))
-    for i,f in enumerate(st.session_state.stored_files):
-        cols[i%len(cols)].image(preprocess_uploaded_image(Image.open(f)), caption=f.name)
+    cols = st.columns(min(4, len(st.session_state.stored_files)))
+    for i, f in enumerate(st.session_state.stored_files):
+        cols[i % len(cols)].image(
+            preprocess_uploaded_image(Image.open(f)),
+            caption=f.name
+        )
 
 if mode == "🎯 Smart Cropper + Branding":
     with st.sidebar.expander("📐 Output Dimensions"):
         tw = st.number_input("Width", 512, 4096, 1200, 100)
         th = st.number_input("Height", 512, 4096, 1800, 100)
         max_kb = st.number_input("Max File Size (KB)", 100, 5000, 800, 50)
+
     with st.sidebar.expander("🧠 Headspace"):
         use_space = st.checkbox("Add Head/Foot Space")
         ts = st.number_input("Top Space", 0,1000,10) if use_space else 0
         bs = st.number_input("Bottom Space", 0,1000,10) if use_space else 0
+
     with st.sidebar.expander("🎨 Logo Settings"):
-        logo_file = st.file_uploader("Upload Logo (PNG, JPG, JPEG)", type=["png","jpg","jpeg"], key="logo_up")
-        scale = st.slider("Logo % of Width",5,50,30)
-        x_off = st.slider("Horz Pos (%)",0,100,50)
-        y_off = st.slider("Vert Pos (%)",0,100,90)
+        logo_file = st.file_uploader(
+            "Upload Logo (PNG, JPG, JPEG)",
+            type=["png","jpg","jpeg"], key="logo_up"
+        )
+        scale = st.slider("Logo % of Width", 5, 50, 30)
+        x_off = st.slider("Logo Horiz Pos (%)", 0, 100, 50)
+        y_off = st.slider("Logo Vert Pos (%)", 0, 100, 90)
         shadow = st.checkbox("Enable Logo Shadow", value=True)
-        sr = st.slider("Shadow Blur",2,50,25) if shadow else 0
-        so = st.slider("Shadow Opacity %",0,100,30) if shadow else 0
+        sr = st.slider("Shadow Blur", 2, 50, 25) if shadow else 0
+        so = st.slider("Shadow Opacity %", 0, 100, 30) if shadow else 0
         bgblur = st.checkbox("Enable Background Blur Under Logo")
-        br = st.slider("Blur Radius",1,50,10) if bgblur else 0
-        mm = st.slider("Mask Margin px",1,50,5) if bgblur else 0
+        br = st.slider("Blur Radius", 1, 50, 10) if bgblur else 0
+        mm = st.slider("Mask Margin px", 1, 50, 5) if bgblur else 0
+
+    # ---- Text Overlay feature ----
+    with st.sidebar.expander("🖋️ Text Overlay"):
+        overlay_text = st.text_input("Overlay Text")
+        text_size = st.slider("Font Size", 10, 200, 40)
+        text_color = st.color_picker("Text Color", "#FFFFFF")
+        text_x_pct = st.slider("Text Horiz Pos (%)", 0, 100, 50)
+        text_y_pct = st.slider("Text Vert Pos (%)", 0, 100, 95)
+
     if st.button("🚀 Process Images") and st.session_state.stored_files:
-        res=[]
+        res = []
         if logo_file:
             tmp = Image.open(logo_file)
-            # ensure RGBA and generate alpha for JPEGs
             logo_img = tmp.convert("RGBA")
-            # create alpha mask for non-transparent logos (e.g. JPEG): treat near-white as transparent
-            if logo_img.mode == "RGBA":
-                datas = logo_img.getdata()
-                newData = []
-                for item in datas:
-                    r,g,b,a = item
-                    # consider white-ish pixels as background
-                    if r > 240 and g > 240 and b > 240:
-                        newData.append((r,g,b,0))
-                    else:
-                        newData.append((r,g,b,a))
-                logo_img.putdata(newData)
+            datas = logo_img.getdata()
+            newData = []
+            for item in datas:
+                r,g,b,a = item
+                if r>240 and g>240 and b>240:
+                    newData.append((r,g,b,0))
+                else:
+                    newData.append((r,g,b,a))
+            logo_img.putdata(newData)
         else:
             logo_img = None
+
         prog = st.progress(0)
-        for idx,f in enumerate(st.session_state.stored_files):
+        for idx, f in enumerate(st.session_state.stored_files):
             img = preprocess_uploaded_image(Image.open(f))
-            if max(img.size)>3000:
-                img = img.resize((img.width//2,img.height//2), Image.LANCZOS)
-            bb = enhanced_subject_detection(model,img) or (img.width//4,img.height//4,3*img.width//4,3*img.height//4)
-            base = smart_resize_preserve_background(img,bb,(tw,th),ts,bs).convert("RGBA")
+            if max(img.size) > 3000:
+                img = img.resize((img.width//2, img.height//2), Image.LANCZOS)
+
+            bb = enhanced_subject_detection(model, img) or (
+                img.width//4, img.height//4,
+                3*img.width//4, 3*img.height//4
+            )
+            base = smart_resize_preserve_background(img, bb, (tw, th), ts, bs).convert("RGBA")
+
             if logo_img:
-                lw = int(scale/100*base.width)
-                lh = int(lw/logo_img.width*logo_img.height)
-                logo_res = logo_img.resize((lw,lh), Image.LANCZOS)
-                x_px = int((x_off/100)*(base.width-lw))
-                y_px = int((y_off/100)*(base.height-lh))
-                if bgblur: base = add_blur_background_under_logo(base,logo_res,x_px,y_px,br,mm).convert("RGBA")
-                if shadow: base = add_black_glow_around_logo(base,logo_res,x_px,y_px,sr,so).convert("RGBA")
-                else: base.paste(logo_res,(x_px,y_px),logo_res)
+                lw = int(scale/100 * base.width)
+                lh = int(lw / logo_img.width * logo_img.height)
+                logo_res = logo_img.resize((lw, lh), Image.LANCZOS)
+                x_px = int((x_off/100) * (base.width - lw))
+                y_px = int((y_off/100) * (base.height - lh))
+
+                if bgblur:
+                    base = add_blur_background_under_logo(base, logo_res, x_px, y_px, br, mm).convert("RGBA")
+                if shadow:
+                    base = add_black_glow_around_logo(base, logo_res, x_px, y_px, sr, so).convert("RGBA")
+                else:
+                    base.paste(logo_res, (x_px, y_px), logo_res)
+
+            # ---- Draw Overlay Text ----
+            if overlay_text:
+                draw = ImageDraw.Draw(base)
+                try:
+                    font = ImageFont.truetype("arial.ttf", text_size)
+                except:
+                    font = ImageFont.load_default()
+                bbox = draw.textbbox((0, 0), overlay_text, font=font)
+                w, h = bbox[2] - bbox[0], bbox[3] - bbox[1]
+                x_text = int((text_x_pct/100) * (base.width - w))
+                y_text = int((text_y_pct/100) * (base.height - h))
+                draw.text((x_text, y_text), overlay_text, font=font, fill=text_color)
+
             final = base.convert("RGB")
-            buf = optimize_image(final,max_kb)
-            res.append((f.name,final,buf))
-            prog.progress((idx+1)/len(st.session_state.stored_files))
+            buf = optimize_image(final, max_kb)
+            res.append((f.name, final, buf))
+            prog.progress((idx+1) / len(st.session_state.stored_files))
+
         st.session_state.results = res
+
     if st.session_state.results:
         st.subheader("Results")
-        cols = st.columns(min(4,len(st.session_state.results)))
-        for i,(name,img,buf) in enumerate(st.session_state.results):
-            with cols[i%len(cols)]:
+        cols = st.columns(min(4, len(st.session_state.results)))
+        for i, (name, img, buf) in enumerate(st.session_state.results):
+            with cols[i % len(cols)]:
                 st.image(img, caption=name)
-                st.download_button("Download",data=buf.getvalue(),file_name=f"branded_{name}",mime="image/jpeg",key=f"dl_{i}")
-        # ZIP download
-        z=io.BytesIO()
-        with zipfile.ZipFile(z,"w") as zf:
-            for name,_,buf in st.session_state.results:
-                zf.writestr(f"branded_{name}",buf.getvalue())
+                st.download_button(
+                    "Download",
+                    data=buf.getvalue(),
+                    file_name=f"branded_{name}",
+                    mime="image/jpeg",
+                    key=f"dl_{i}"
+                )
+        z = io.BytesIO()
+        with zipfile.ZipFile(z, "w") as zf:
+            for name, _, buf in st.session_state.results:
+                zf.writestr(f"branded_{name}", buf.getvalue())
         z.seek(0)
-        st.download_button("Download All ZIP",data=z.getvalue(),file_name="branded_images.zip",mime="application/zip")
+        st.download_button(
+            "Download All ZIP",
+            data=z.getvalue(),
+            file_name="branded_images.zip",
+            mime="application/zip"
+        )
