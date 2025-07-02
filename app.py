@@ -374,7 +374,7 @@ if st.session_state.stored_files:
         if logo_file:
             logo_preview = Image.open(logo_file)
             st.image(logo_preview, width=150)
-            
+             
             scale = st.slider("Logo Size (%)", 5, 50, 25)
             x_off = st.slider("X Position (%)", 0, 100, 50)
             y_off = st.slider("Y Position (%)", 0, 100, 85)
