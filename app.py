@@ -1,20 +1,18 @@
 import os
-from PIL import Image, ImageFont, ImageDraw, ImageFilter
-os.environ["STREAMLIT_DISABLE_WATCHDOG_WARNINGS"] = "true"
-
-import streamlit as st
-from PIL import Image
 import io, zipfile
-import cv2
+import ssl, warnings
+import streamlit as st
 import numpy as np
+import cv2
+from PIL import Image, ImageDraw, ImageFilter, ImageFont
 from rembg import remove
 from ultralytics import YOLO
-import ssl, warnings
 
 warnings.filterwarnings("ignore")
-# SSL fix
 ssl._create_default_https_context = ssl._create_unverified_context
+os.environ["STREAMLIT_DISABLE_WATCHDOG_WARNINGS"] = "true"
 
+# =================== Streamlit Config ===================
 st.set_page_config(
     page_title="AI Cropper + Brand Generator",
     layout="wide",
@@ -28,10 +26,24 @@ def load_yolo_model():
 
 model = load_yolo_model()
 
-# =================== UTILITIES ===================
+# =================== Utility Functions ===================
 
-def compute_center_of_bbox(bbox):
-    return ((bbox[0] + bbox[2]) // 2, (bbox[1] + bbox[3]) // 2)
+def preprocess_uploaded_image(img, max_dim=2048):
+    if max(img.size) > max_dim:
+        ratio = max_dim / max(img.size)
+        img = img.resize((int(img.width * ratio), int(img.height * ratio)), Image.LANCZOS)
+    return img.convert("RGB")
+
+def optimize_image(img, max_size_kb):
+    buf = io.BytesIO()
+    q = 95
+    img.save(buf, "JPEG", quality=q, optimize=True, progressive=True)
+    while buf.tell()/1024 > max_size_kb and q > 10:
+        buf.seek(0); buf.truncate()
+        q -= 5
+        img.save(buf, "JPEG", quality=q, optimize=True, progressive=True)
+    buf.seek(0)
+    return buf
 
 def enhanced_subject_detection(model, img):
     img_cv = cv2.cvtColor(np.array(img), cv2.COLOR_RGB2BGR)
@@ -62,7 +74,6 @@ def smart_resize_preserve_background(image, bbox, target_size, top_space=0, bott
 
     x0, y0, x1, y1 = bbox
     y0, y1 = max(0, y0 - top_space), min(img_h, y1 + bottom_space)
-
     box_w, box_h = x1 - x0, y1 - y0
     box_cx, box_cy = (x0 + x1) // 2, (y0 + y1) // 2
 
@@ -116,24 +127,15 @@ def add_blur_background_under_logo(base_img, logo_img, x_px, y_px, blur_radius=1
     base.paste(blended, (x_px, y_px))
     return base.convert("RGB")
 
-def optimize_image(img, max_size_kb):
-    buf = io.BytesIO()
-    q = 95
-    img.save(buf, "JPEG", quality=q, optimize=True, progressive=True)
-    while buf.tell()/1024 > max_size_kb and q > 10:
-        buf.seek(0); buf.truncate()
-        q -= 5
-        img.save(buf, "JPEG", quality=q, optimize=True, progressive=True)
-    buf.seek(0)
-    return buf
+def merge_logos_horizontally(logo1, logo2, padding=20):
+    h = max(logo1.height, logo2.height)
+    merged_width = logo1.width + logo2.width + padding
+    merged = Image.new("RGBA", (merged_width, h), (0, 0, 0, 0))
+    merged.paste(logo1, (0, (h - logo1.height) // 2), logo1)
+    merged.paste(logo2, (logo1.width + padding, (h - logo2.height) // 2), logo2)
+    return merged
 
-def preprocess_uploaded_image(img, max_dim=2048):
-    if max(img.size) > max_dim:
-        ratio = max_dim / max(img.size)
-        img = img.resize((int(img.width * ratio), int(img.height * ratio)), Image.LANCZOS)
-    return img.convert("RGB")
-
-# =================== UI ===================
+# =================== UI State ===================
 if "upload_key" not in st.session_state:
     st.session_state.upload_key = 0
 if "stored_files" not in st.session_state:
@@ -183,10 +185,14 @@ if mode == "🎯 Smart Cropper + Branding":
         bs = st.number_input("Bottom Space", 0,1000,10) if use_space else 0
 
     with st.sidebar.expander("🎨 Logo Settings"):
-        logo_file = st.file_uploader(
-            "Upload Logo (PNG, JPG, JPEG)",
-            type=["png","jpg","jpeg"], key="logo_up"
-        )
+        collab_mode = st.checkbox("Collaboration Post")
+        if collab_mode:
+            logo_file1 = st.file_uploader("Upload First Logo", type=["png","jpg","jpeg"], key="logo1_up")
+            logo_file2 = st.file_uploader("Upload Second Logo", type=["png","jpg","jpeg"], key="logo2_up")
+            merge_padding = st.slider("Collab Logo Padding (px)", 0, 100, 20)
+        else:
+            logo_file = st.file_uploader("Upload Logo (PNG, JPG, JPEG)", type=["png","jpg","jpeg"], key="logo_up")
+
         scale = st.slider("Logo % of Width", 5, 50, 30)
         x_off = st.slider("Logo Horiz Pos (%)", 0, 100, 50)
         y_off = st.slider("Logo Vert Pos (%)", 0, 100, 90)
@@ -197,31 +203,47 @@ if mode == "🎯 Smart Cropper + Branding":
         br = st.slider("Blur Radius", 1, 50, 10) if bgblur else 0
         mm = st.slider("Mask Margin px", 1, 50, 5) if bgblur else 0
 
-    # ---- Text Overlay feature ----
     with st.sidebar.expander("🖋️ Text Overlay"):
         overlay_text = st.text_input("Overlay Text")
         text_size = st.slider("Font Size", 10, 200, 40)
         text_color = st.color_picker("Text Color", "#FFFFFF")
+        font_family = st.selectbox(
+            "Font Family",
+            [
+                "Arial",
+                "Helvetica",
+                "Times New Roman",
+                "Chronicle Display",
+                "Facundo",
+                "Felidae",
+                "Edwardian Script ITC"
+            ]
+        )
         text_x_pct = st.slider("Text Horiz Pos (%)", 0, 100, 50)
         text_y_pct = st.slider("Text Vert Pos (%)", 0, 100, 95)
 
     if st.button("🚀 Process Images") and st.session_state.stored_files:
         res = []
-        if logo_file:
-            tmp = Image.open(logo_file)
-            logo_img = tmp.convert("RGBA")
-            datas = logo_img.getdata()
-            newData = []
-            for item in datas:
-                r,g,b,a = item
-                if r>240 and g>240 and b>240:
-                    newData.append((r,g,b,0))
-                else:
-                    newData.append((r,g,b,a))
-            logo_img.putdata(newData)
+
+        # ==== Load Logos ====
+        if collab_mode and logo_file1 and logo_file2:
+            tmp1 = Image.open(logo_file1).convert("RGBA")
+            tmp2 = Image.open(logo_file2).convert("RGBA")
+            datas1 = tmp1.getdata()
+            newData1 = [(r,g,b,0) if r>240 and g>240 and b>240 else (r,g,b,a) for r,g,b,a in datas1]
+            tmp1.putdata(newData1)
+            datas2 = tmp2.getdata()
+            newData2 = [(r,g,b,0) if r>240 and g>240 and b>240 else (r,g,b,a) for r,g,b,a in datas2]
+            tmp2.putdata(newData2)
+            logo_img = merge_logos_horizontally(tmp1, tmp2, padding=merge_padding)
+        elif not collab_mode and logo_file:
+            tmp = Image.open(logo_file).convert("RGBA")
+            datas = tmp.getdata()
+            newData = [(r,g,b,0) if r>240 and g>240 and b>240 else (r,g,b,a) for r,g,b,a in datas]
+            tmp.putdata(newData)
+            logo_img = tmp
         else:
             logo_img = None
-
         prog = st.progress(0)
         for idx, f in enumerate(st.session_state.stored_files):
             img = preprocess_uploaded_image(Image.open(f))
@@ -234,6 +256,7 @@ if mode == "🎯 Smart Cropper + Branding":
             )
             base = smart_resize_preserve_background(img, bb, (tw, th), ts, bs).convert("RGBA")
 
+            # ---- Add Logo ----
             if logo_img:
                 lw = int(scale/100 * base.width)
                 lh = int(lw / logo_img.width * logo_img.height)
@@ -248,13 +271,25 @@ if mode == "🎯 Smart Cropper + Branding":
                 else:
                     base.paste(logo_res, (x_px, y_px), logo_res)
 
-            # ---- Draw Overlay Text ----
+            # ---- Add Text Overlay ----
             if overlay_text:
                 draw = ImageDraw.Draw(base)
+                font_folder = "fonts"
+                font_paths = {
+                    "Arial": os.path.join(font_folder, "arial.ttf"),
+                    "Helvetica": os.path.join(font_folder, "helvetica.ttf"),
+                    "Times New Roman": os.path.join(font_folder, "times.ttf"),
+                    "Chronicle Display": os.path.join(font_folder, "Chronicle Display Black.ttf"),
+                    "Facundo": os.path.join(font_folder, "Facundo.ttf"),
+                    "Felidae": os.path.join(font_folder, "Felidae.ttf"),
+                    "Edwardian Script ITC": os.path.join(font_folder, "Edwardian.ttf")
+                }
+                font_file = font_paths.get(font_family, "arial.ttf")
                 try:
-                    font = ImageFont.truetype("arial.ttf", text_size)
+                    font = ImageFont.truetype(font_file, text_size)
                 except:
                     font = ImageFont.load_default()
+
                 bbox = draw.textbbox((0, 0), overlay_text, font=font)
                 w, h = bbox[2] - bbox[0], bbox[3] - bbox[1]
                 x_text = int((text_x_pct/100) * (base.width - w))
@@ -268,6 +303,7 @@ if mode == "🎯 Smart Cropper + Branding":
 
         st.session_state.results = res
 
+    # =================== Results ===================
     if st.session_state.results:
         st.subheader("Results")
         cols = st.columns(min(4, len(st.session_state.results)))
