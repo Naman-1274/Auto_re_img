@@ -127,13 +127,36 @@ def add_blur_background_under_logo(base_img, logo_img, x_px, y_px, blur_radius=1
     base.paste(blended, (x_px, y_px))
     return base.convert("RGB")
 
-def merge_logos_horizontally(logo1, logo2, padding=20):
-    h = max(logo1.height, logo2.height)
-    merged_width = logo1.width + logo2.width + padding
-    merged = Image.new("RGBA", (merged_width, h), (0, 0, 0, 0))
-    merged.paste(logo1, (0, (h - logo1.height) // 2), logo1)
-    merged.paste(logo2, (logo1.width + padding, (h - logo2.height) // 2), logo2)
+def merge_logos_horizontally(logo1, logo2, padding=20, separator_text="×", separator_font_size=40):
+    try:
+        font = ImageFont.truetype("arial.ttf", separator_font_size)
+    except:
+        font = ImageFont.load_default()
+
+    # Measure text size using getbbox (Pillow ≥ 10.0.0)
+    bbox = font.getbbox(separator_text)
+    text_width, text_height = bbox[2] - bbox[0], bbox[3] - bbox[1]
+
+    h = max(logo1.height, logo2.height, text_height)
+    total_width = logo1.width + logo2.width + text_width + 2 * padding
+    merged = Image.new("RGBA", (total_width, h), (0, 0, 0, 0))
+
+    y1 = (h - logo1.height) // 2
+    y2 = (h - logo2.height) // 2
+    text_y = (h - text_height) // 2
+
+    merged.paste(logo1, (0, y1), logo1)
+
+    draw = ImageDraw.Draw(merged)
+    text_x = logo1.width + padding
+    draw.text((text_x, text_y), separator_text, font=font, fill=(255, 255, 255, 255))
+
+    merged.paste(logo2, (text_x + text_width + padding, y2), logo2)
+
     return merged
+
+
+
 
 # =================== UI State ===================
 if "upload_key" not in st.session_state:
@@ -190,6 +213,11 @@ if mode == "🎯 Smart Cropper + Branding":
             logo_file1 = st.file_uploader("Upload First Logo", type=["png","jpg","jpeg"], key="logo1_up")
             logo_file2 = st.file_uploader("Upload Second Logo", type=["png","jpg","jpeg"], key="logo2_up")
             merge_padding = st.slider("Collab Logo Padding (px)", 0, 100, 20)
+
+    # 👇 New: Custom symbol and font size
+            separator_text = st.text_input("Symbol Between Logos", value="×")
+            separator_font_size = st.slider("Symbol Size", 10, 200, 40)
+
         else:
             logo_file = st.file_uploader("Upload Logo (PNG, JPG, JPEG)", type=["png","jpg","jpeg"], key="logo_up")
 
@@ -235,7 +263,13 @@ if mode == "🎯 Smart Cropper + Branding":
             datas2 = tmp2.getdata()
             newData2 = [(r,g,b,0) if r>240 and g>240 and b>240 else (r,g,b,a) for r,g,b,a in datas2]
             tmp2.putdata(newData2)
-            logo_img = merge_logos_horizontally(tmp1, tmp2, padding=merge_padding)
+            logo_img = merge_logos_horizontally(
+    tmp1, tmp2,
+    padding=merge_padding,
+    separator_text=separator_text,
+    separator_font_size=separator_font_size
+)
+
         elif not collab_mode and logo_file:
             tmp = Image.open(logo_file).convert("RGBA")
             datas = tmp.getdata()
