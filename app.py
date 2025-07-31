@@ -32,7 +32,7 @@ st.markdown("""
 <style>
     /* Main app styling */
     .main-header {
-        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+        background: linear-gradient(135deg, #2C3E50 0%, #764ba2 100%);
         padding: 2rem 1rem;
         border-radius: 12px;
         margin-bottom: 2rem;    
@@ -55,15 +55,15 @@ st.markdown("""
     
     /* Sidebar styling */
     .sidebar-section {
-        background: linear-gradient(135deg, #74b9ff 0%, #0984e3 100%);
+        background: linear-gradient(90deg, #1E2761, #20c997);
         padding: 1rem;
         border-radius: 8px;
         margin-bottom: 1rem;
-        border-left: 4px solid #667eea;
+        border-left: 4px solid #1E2761;
     }
     
     .sidebar-section h3 {
-        color: #2c3e50;
+        color: #ffffff;
         margin-bottom: 1rem;
         font-weight: 600;
     }
@@ -189,10 +189,10 @@ st.markdown("""
     }
     
     .feature-item {
-        background: linear-gradient(135deg, #74b9ff 0%, #0984e3 100%);
+        background: linear-gradient(135deg, #FF6B6B 0%, #0984e3 100%);
         padding: 1.5rem;
         border-radius: 8px;
-        border-left: 4px solid #667eea;
+        border-left: 4px solid #FF6B6B;
         box-shadow: 0 2px 8px rgba(0,0,0,0.1);
     }
 
